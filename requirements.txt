@@ -1,0 +1,4 @@
+beautifulsoup4
+pymysql
+selenium
+webdriver-manager
