@@ -36,6 +36,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
+VENV_DIR="${VENV_DIR:-.venv}"
 
 echo "==> Garantindo pip no ambiente"
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
@@ -49,9 +50,28 @@ if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
   fi
 fi
 
-echo "==> Atualizando dependencias Python"
-"$PYTHON_BIN" -m pip install --user --upgrade pip
-"$PYTHON_BIN" -m pip install --user -r requirements.txt
+echo "==> Preparando ambiente virtual em $VENV_DIR"
+if [ ! -d "$VENV_DIR" ]; then
+  if ! "$PYTHON_BIN" -m venv "$VENV_DIR" >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      install_with_apt python3-venv
+    elif command -v apk >/dev/null 2>&1; then
+      install_with_apk py3-virtualenv
+    fi
+
+    if ! "$PYTHON_BIN" -m venv "$VENV_DIR" >/dev/null 2>&1; then
+      "$PYTHON_BIN" -m virtualenv "$VENV_DIR"
+    fi
+  fi
+fi
+
+# shellcheck disable=SC1090
+source "$VENV_DIR/bin/activate"
+
+echo "==> Atualizando dependencias Python na virtualenv"
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+echo "==> Virtualenv pronta. Ative com: source $VENV_DIR/bin/activate"
 
 if command -v google-chrome >/dev/null 2>&1; then
   echo "==> Google Chrome ja instalado: $(google-chrome --version)"

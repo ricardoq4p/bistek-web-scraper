@@ -11,6 +11,7 @@ bash scripts/setup_codespaces.sh
 O script:
 
 - instala as dependencias Python de `requirements.txt`
+- cria e atualiza a virtualenv `.venv`
 - instala `pip` se o ambiente vier sem ele
 - no Debian/Ubuntu, baixa e instala o Google Chrome oficial
 - no Alpine, instala Chromium e Chromedriver pelos pacotes `apk`
@@ -20,6 +21,7 @@ Depois de criar ou reconstruir o Codespace, rode:
 
 ```bash
 bash scripts/setup_codespaces.sh
+. .venv/bin/activate
 python main.py
 ```
 
@@ -34,6 +36,7 @@ Se o Codespace estiver usando Alpine, o navegador sera `chromium` ou `chromium-b
 Para abrir a pagina de consulta:
 
 ```bash
+. .venv/bin/activate
 python app.py
 ```
 
@@ -49,8 +52,16 @@ bash scripts/setup_codespaces.sh
 
 O script instala o navegador e mostra o caminho encontrado no final.
 
+Se aparecer `externally-managed-environment`, o terminal ainda nao estava usando a `.venv`. Rode:
+
+```bash
+bash scripts/setup_codespaces.sh
+source .venv/bin/activate
+```
+
 Se o `python app.py` responder com `Port 5000 is in use`, suba a interface em outra porta:
 
 ```bash
+source .venv/bin/activate
 PORT=5001 python app.py
 ```
