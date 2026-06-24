@@ -1,0 +1,96 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bistek - Produtos</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Produtos Bistek</h1>
+          <p>Consulta direta da tabela <strong>produtos</strong>.</p>
+        </div>
+        <a class="button secondary" href="/api/produtos">JSON</a>
+      </header>
+
+      {% if erro %}
+        <section class="alert">
+          <strong>Erro ao conectar no MySQL.</strong>
+          <span>{{ erro }}</span>
+        </section>
+      {% endif %}
+
+      <section class="metrics">
+        <div>
+          <span>Total</span>
+          <strong>{{ resumo.total or 0 }}</strong>
+        </div>
+        <div>
+          <span>Com preco Clube</span>
+          <strong>{{ resumo.comPrecoClube or 0 }}</strong>
+        </div>
+        <div>
+          <span>Preco medio</span>
+          <strong>{{ resumo.precoMedio | dinheiro }}</strong>
+        </div>
+        <div>
+          <span>Ultima coleta</span>
+          <strong>{{ resumo.ultimaColeta | datahora }}</strong>
+        </div>
+      </section>
+
+      <form class="filters" method="get">
+        <label>
+          <span>Buscar produto</span>
+          <input name="q" value="{{ termo }}" placeholder="Nome do produto">
+        </label>
+        <label class="check">
+          <input type="checkbox" name="clube" value="1" {% if apenas_clube %}checked{% endif %}>
+          <span>Somente preco Clube</span>
+        </label>
+        <button class="button" type="submit">Filtrar</button>
+        <a class="button ghost" href="/">Limpar</a>
+      </form>
+
+      <section class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Produto</th>
+              <th>Preco</th>
+              <th>Preco Clube</th>
+              <th>Coleta</th>
+              <th>Link</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for produto in produtos %}
+              <tr>
+                <td>{{ produto.id }}</td>
+                <td class="name">{{ produto.nomeProduto }}</td>
+                <td>{{ produto.preco | dinheiro }}</td>
+                <td>{{ produto.precoClube | dinheiro }}</td>
+                <td>{{ produto.dataColeta | datahora }}</td>
+                <td>
+                  {% if produto.link %}
+                    <a class="link" href="{{ produto.link }}" target="_blank" rel="noreferrer">Abrir</a>
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+            {% else %}
+              <tr>
+                <td class="empty" colspan="6">Nenhum produto encontrado.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>
