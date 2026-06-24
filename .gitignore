@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 .vscode/
 *.log
+.env
 pagina.html
 pagina.png

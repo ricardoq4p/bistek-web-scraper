@@ -1,0 +1,17 @@
+CREATE DATABASE IF NOT EXISTS bistek
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+USE bistek;
+
+CREATE TABLE IF NOT EXISTS produtos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nomeProduto VARCHAR(255),
+  preco DECIMAL(10,2),
+  precoClube DECIMAL(10,2),
+  precoPorUnidade VARCHAR(50),
+  desconto VARCHAR(20),
+  link VARCHAR(500),
+  imagem VARCHAR(500),
+  dataColeta DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
