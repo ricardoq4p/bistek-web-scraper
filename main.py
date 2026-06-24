@@ -17,9 +17,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-
-
 BASE_URL = "https://www.bistek.com.br"
 DB_NAME = "bistek"
 TABLE_NAME = "produtos"
@@ -86,24 +83,35 @@ def limpar_texto(texto: str) -> str:
 
 def configurar_driver() -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
-    service_path = None
+    service_path = shutil.which("chromedriver")
 
-    if os.path.exists("/usr/bin/google-chrome"):
-        options.binary_location = "/usr/bin/google-chrome"
-        logger.info("Executando no GitHub Codespaces.")
-        logger.info("Chrome encontrado em: /usr/bin/google-chrome")
-    elif os.path.exists("/usr/bin/chromium-browser"):
-        options.binary_location = "/usr/bin/chromium-browser"
-        service_path = shutil.which("chromedriver")
-        logger.info("Executando em Linux com Chromium.")
-        logger.info("Chromium encontrado em: /usr/bin/chromium-browser")
-    elif os.path.exists("/usr/bin/chromium"):
-        options.binary_location = "/usr/bin/chromium"
-        service_path = shutil.which("chromedriver")
-        logger.info("Executando em Linux com Chromium.")
-        logger.info("Chromium encontrado em: /usr/bin/chromium")
+    caminhos_candidatos = (
+        ("google-chrome", "GitHub Codespaces"),
+        ("google-chrome-stable", "GitHub Codespaces"),
+        ("chromium-browser", "Linux com Chromium"),
+        ("chromium", "Linux com Chromium"),
+    )
+
+    navegador_encontrado = None
+    ambiente = platform.system()
+
+    for executavel, descricao in caminhos_candidatos:
+        caminho = shutil.which(executavel)
+        if caminho:
+            navegador_encontrado = caminho
+            ambiente = descricao
+            break
+
+    if navegador_encontrado:
+        options.binary_location = navegador_encontrado
+        logger.info("Executando em %s.", ambiente)
+        logger.info("Navegador encontrado em: %s", navegador_encontrado)
     else:
-        logger.info("Executando em %s.", platform.system())
+        raise RuntimeError(
+            "Nenhum navegador Chrome/Chromium foi encontrado no ambiente. "
+            "No Codespaces, rode 'bash scripts/setup_codespaces.sh' e depois "
+            "reabra o terminal ou reconstrua o container se o Docker/Chrome ainda nao aparecer."
+        )
 
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-notifications")
@@ -116,14 +124,19 @@ def configurar_driver() -> webdriver.Chrome:
 
     logger.info("Iniciando Chrome via Selenium.")
     logger.info("Chrome binary: %s", options.binary_location)
-    logger.info("ChromeDriver: %s", service_path or "webdriver-manager")
+    logger.info("ChromeDriver: %s", service_path or "selenium-manager")
 
-    service = Service(service_path) if service_path else Service(ChromeDriverManager().install())
-
-    driver = webdriver.Chrome(
-        service=service,
-        options=options,
-    )
+    try:
+        if service_path:
+            driver = webdriver.Chrome(service=Service(service_path), options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+    except FileNotFoundError as erro:
+        raise RuntimeError(
+            "O ChromeDriver nao foi encontrado ou nao ficou disponivel apos a instalacao. "
+            "No Codespaces, rode 'bash scripts/setup_codespaces.sh' para instalar o navegador "
+            "e tente novamente."
+        ) from erro
     logger.info("Chrome iniciado com sucesso.")
     return driver
 

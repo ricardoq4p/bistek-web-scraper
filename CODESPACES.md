@@ -19,6 +19,7 @@ O script:
 Depois de criar ou reconstruir o Codespace, rode:
 
 ```bash
+bash scripts/setup_codespaces.sh
 python main.py
 ```
 
@@ -37,3 +38,19 @@ python app.py
 ```
 
 Acesse a porta `5000` na aba **Ports** do Codespaces.
+
+Se aparecer `bash: docker: command not found`, o container ainda nao recebeu o recurso Docker. Rode **Codespaces: Rebuild Container** e execute o script de setup novamente.
+
+Se o `python main.py` falhar dizendo que nao encontrou Chrome/Chromium, rode:
+
+```bash
+bash scripts/setup_codespaces.sh
+```
+
+O script instala o navegador e mostra o caminho encontrado no final.
+
+Se o `python app.py` responder com `Port 5000 is in use`, suba a interface em outra porta:
+
+```bash
+PORT=5001 python app.py
+```
