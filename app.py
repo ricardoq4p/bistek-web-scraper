@@ -8,16 +8,8 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 
 
-def garantir_coluna(cursor, nome_coluna: str, definicao_sql: str) -> None:
-    cursor.execute("SHOW COLUMNS FROM produtos LIKE %s", (nome_coluna,))
-    if cursor.fetchone():
-        return
-
-    cursor.execute(f"ALTER TABLE produtos ADD COLUMN `{nome_coluna}` {definicao_sql}")
-
-
 def conectar_mysql():
-    conexao = pymysql.connect(
+    return pymysql.connect(
         host=os.getenv("MYSQL_HOST", "127.0.0.1"),
         port=int(os.getenv("MYSQL_PORT", "3306")),
         user=os.getenv("MYSQL_USER", "root"),
@@ -26,14 +18,6 @@ def conectar_mysql():
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
     )
-
-    with conexao.cursor() as cursor:
-        garantir_coluna(cursor, "categoria", "VARCHAR(100) NULL AFTER nomeProduto")
-        garantir_coluna(cursor, "precoAntigo", "DECIMAL(10,2) NULL AFTER categoria")
-        garantir_coluna(cursor, "data_extracao", "DATETIME DEFAULT CURRENT_TIMESTAMP AFTER dataColeta")
-
-    conexao.commit()
-    return conexao
 
 
 def serializar_valor(valor):
@@ -48,7 +32,7 @@ def buscar_resumo():
             COUNT(*) AS total,
             SUM(CASE WHEN precoClube IS NOT NULL THEN 1 ELSE 0 END) AS comPrecoClube,
             AVG(preco) AS precoMedio,
-            MAX(COALESCE(data_extracao, dataColeta)) AS ultimaColeta
+            MAX(dataColeta) AS ultimaColeta
         FROM produtos
     """
 
@@ -74,15 +58,13 @@ def buscar_produtos(termo="", apenas_clube=False):
         SELECT
             id,
             nomeProduto,
-            categoria,
-            precoAntigo,
             preco,
             precoClube,
             link,
-            COALESCE(data_extracao, dataColeta) AS dataColeta
+            dataColeta
         FROM produtos
         {where}
-        ORDER BY COALESCE(data_extracao, dataColeta) DESC, id DESC
+        ORDER BY dataColeta DESC, id DESC
         LIMIT 500
     """
 

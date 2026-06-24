@@ -38,14 +38,14 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Produto:
     nome: str
-    categoria: Optional[str]
     preco_antigo: Optional[float]
     preco_atual: Optional[float]
     preco_clube: Optional[float]
+    link: str
+    categoria: Optional[str]
     preco_por_unidade: str
     desconto: str
     imagem: str
-    link: str
 
 
 @dataclass
@@ -629,14 +629,14 @@ def extrair_produto(nome_tag, categoria: Optional[str]) -> Optional[Produto]:
 
     return Produto(
         nome=nome,
-        categoria=categoria,
         preco_antigo=preco_antigo,
         preco_atual=preco_atual,
         preco_clube=preco_clube,
+        link=link,
+        categoria=categoria,
         preco_por_unidade=extrair_preco_por_unidade(textos),
         desconto=extrair_desconto(textos),
         imagem=extrair_imagem(card),
-        link=link,
     )
 
 
@@ -661,14 +661,14 @@ def extrair_produto_de_card(card, categoria: Optional[str]) -> Optional[Produto]
 
     return Produto(
         nome=nome,
-        categoria=categoria,
         preco_antigo=preco_antigo,
         preco_atual=preco_atual,
         preco_clube=preco_clube,
+        link=link,
+        categoria=categoria,
         preco_por_unidade=extrair_preco_por_unidade(textos),
         desconto=extrair_desconto(textos),
         imagem=extrair_imagem(card),
-        link=link,
     )
 
 
@@ -699,19 +699,23 @@ def conectar_mysql():
             CREATE TABLE IF NOT EXISTS `{TABLE_NAME}` (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 nomeProduto VARCHAR(255),
-                categoria VARCHAR(100),
                 precoAntigo DECIMAL(10,2),
                 preco DECIMAL(10,2),
                 precoClube DECIMAL(10,2),
                 link VARCHAR(500),
-                dataColeta DATETIME DEFAULT CURRENT_TIMESTAMP,
-                data_extracao DATETIME DEFAULT CURRENT_TIMESTAMP
+                categoria VARCHAR(100),
+                dataColeta DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
-        garantir_coluna(cursor, "categoria", "VARCHAR(100) NULL AFTER nomeProduto")
-        garantir_coluna(cursor, "precoAntigo", "DECIMAL(10,2) NULL AFTER categoria")
-        garantir_coluna(cursor, "data_extracao", "DATETIME DEFAULT CURRENT_TIMESTAMP AFTER dataColeta")
+        garantir_coluna(cursor, "precoAntigo", "DECIMAL(10,2) NULL AFTER nomeProduto")
+        garantir_coluna(cursor, "categoria", "VARCHAR(100) NULL AFTER link")
+        cursor.execute(
+            f"ALTER TABLE `{TABLE_NAME}` "
+            "MODIFY COLUMN `precoAntigo` DECIMAL(10,2) NULL AFTER `nomeProduto`, "
+            "MODIFY COLUMN `categoria` VARCHAR(100) NULL AFTER `link`, "
+            "MODIFY COLUMN `dataColeta` DATETIME DEFAULT CURRENT_TIMESTAMP AFTER `categoria`"
+        )
 
     conexao.commit()
     return conexao
@@ -729,12 +733,12 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
     sql = f"""
         INSERT INTO `{TABLE_NAME}` (
             nomeProduto,
-            categoria,
             precoAntigo,
             preco,
             precoClube,
             link,
-            data_extracao
+            categoria,
+            dataColeta
         )
         VALUES (%s, %s, %s, %s, %s, %s, NOW())
     """
@@ -747,11 +751,11 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
                     sql,
                     (
                         produto.nome,
-                        produto.categoria,
                         produto.preco_antigo,
                         produto.preco_atual,
                         produto.preco_clube,
                         produto.link,
+                        produto.categoria,
                     ),
                 )
                 salvos += 1
