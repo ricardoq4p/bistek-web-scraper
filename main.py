@@ -2,6 +2,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,11 +86,22 @@ def limpar_texto(texto: str) -> str:
 
 def configurar_driver() -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
+    service_path = None
 
     if os.path.exists("/usr/bin/google-chrome"):
         options.binary_location = "/usr/bin/google-chrome"
         logger.info("Executando no GitHub Codespaces.")
         logger.info("Chrome encontrado em: /usr/bin/google-chrome")
+    elif os.path.exists("/usr/bin/chromium-browser"):
+        options.binary_location = "/usr/bin/chromium-browser"
+        service_path = shutil.which("chromedriver")
+        logger.info("Executando em Linux com Chromium.")
+        logger.info("Chromium encontrado em: /usr/bin/chromium-browser")
+    elif os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
+        service_path = shutil.which("chromedriver")
+        logger.info("Executando em Linux com Chromium.")
+        logger.info("Chromium encontrado em: /usr/bin/chromium")
     else:
         logger.info("Executando em %s.", platform.system())
 
@@ -104,9 +116,12 @@ def configurar_driver() -> webdriver.Chrome:
 
     logger.info("Iniciando Chrome via Selenium.")
     logger.info("Chrome binary: %s", options.binary_location)
+    logger.info("ChromeDriver: %s", service_path or "webdriver-manager")
+
+    service = Service(service_path) if service_path else Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
+        service=service,
         options=options,
     )
     logger.info("Chrome iniciado com sucesso.")
