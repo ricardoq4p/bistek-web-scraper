@@ -22,7 +22,7 @@ Depois de criar ou reconstruir o Codespace, rode:
 python main.py
 ```
 
-Se o comando `docker` nao existir no terminal, rode **Codespaces: Rebuild Container** pelo Command Palette. O projeto usa o recurso `docker-outside-of-docker` configurado em `.devcontainer/devcontainer.json`.
+Se o Codespace abrir em modo de recuperacao ou aparecer uma imagem Alpine, rode **Codespaces: Rebuild Container** pelo Command Palette depois de atualizar o repositorio. O projeto usa a imagem `mcr.microsoft.com/devcontainers/universal:2`, que ja traz um ambiente mais completo para Python e Docker.
 
 Se o script avisar que `apt/dpkg` esta ocupado, aguarde. Ele tenta novamente automaticamente ate o lock ser liberado.
 
