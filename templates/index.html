@@ -61,6 +61,8 @@
             <tr>
               <th>ID</th>
               <th>Produto</th>
+              <th>Categoria</th>
+              <th>Preco Antigo</th>
               <th>Preco</th>
               <th>Preco Clube</th>
               <th>Coleta</th>
@@ -72,6 +74,8 @@
               <tr>
                 <td>{{ produto.id }}</td>
                 <td class="name">{{ produto.nomeProduto }}</td>
+                <td>{{ produto.categoria or "-" }}</td>
+                <td>{{ produto.precoAntigo | dinheiro }}</td>
                 <td>{{ produto.preco | dinheiro }}</td>
                 <td>{{ produto.precoClube | dinheiro }}</td>
                 <td>{{ produto.dataColeta | datahora }}</td>
@@ -85,7 +89,7 @@
               </tr>
             {% else %}
               <tr>
-                <td class="empty" colspan="6">Nenhum produto encontrado.</td>
+                <td class="empty" colspan="8">Nenhum produto encontrado.</td>
               </tr>
             {% endfor %}
           </tbody>

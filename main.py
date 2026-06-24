@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import pymysql
 from bs4 import BeautifulSoup
@@ -18,6 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 BASE_URL = "https://www.bistek.com.br"
+SCRAPER_URL = os.getenv("BISTEK_SCRAPER_URL", BASE_URL)
 DB_NAME = "bistek"
 TABLE_NAME = "produtos"
 SELETOR_NOME_PRODUTO = ".vtex-flex-layout-0-x-flexRow--container__name"
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Produto:
     nome: str
+    categoria: Optional[str]
+    preco_antigo: Optional[float]
     preco_atual: Optional[float]
     preco_clube: Optional[float]
     preco_por_unidade: str
@@ -79,6 +82,18 @@ def extrair_primeiro_preco(texto: str) -> Optional[float]:
 
 def limpar_texto(texto: str) -> str:
     return re.sub(r"\s+", " ", texto or "").strip()
+
+
+def extrair_categoria_da_url(url: str) -> Optional[str]:
+    caminho = urlparse(url).path.rstrip("/")
+    if not caminho:
+        return None
+
+    slug = caminho.split("/")[-1].strip()
+    if not slug or slug.lower() == "p":
+        return None
+
+    return slug.replace("-", " ").title()
 
 
 def configurar_driver() -> webdriver.Chrome:
@@ -499,6 +514,63 @@ def extrair_preco_atual(card) -> Optional[float]:
     return None
 
 
+def extrair_preco_antigo(card, preco_atual: Optional[float], preco_clube: Optional[float]) -> Optional[float]:
+    seletores_preco_antigo = (
+        "del",
+        "s",
+        ".vtex-product-price-1-x-listPriceValue",
+        ".vtex-store-components-3-x-listPrice",
+        "[class*='list-price']",
+        "[class*='ListPrice']",
+    )
+
+    for seletor in seletores_preco_antigo:
+        for elemento in card.select(seletor):
+            texto = texto_do_elemento(elemento)
+            if "R$" not in texto:
+                continue
+
+            try:
+                preco = extrair_primeiro_preco(texto)
+            except ValueError:
+                continue
+
+            if preco is None:
+                continue
+            if preco_atual is not None and preco <= preco_atual:
+                continue
+            if preco_clube is not None and preco <= preco_clube:
+                continue
+            return preco
+
+    candidatos = []
+    for elemento in card.find_all(["span", "div", "p"]):
+        texto = texto_do_elemento(elemento)
+        if "R$" not in texto:
+            continue
+        if any(unidade in texto.lower() for unidade in ("/kg", "/ kg", "/l", "/ l", "/lt", "litro")):
+            continue
+
+        try:
+            preco = extrair_primeiro_preco(texto)
+        except ValueError:
+            continue
+
+        if preco is not None:
+            candidatos.append(preco)
+
+    referencias = [valor for valor in (preco_atual, preco_clube) if valor is not None]
+    if not candidatos or not referencias:
+        return None
+
+    maior_referencia = max(referencias)
+    precos_validos = [preco for preco in candidatos if preco > maior_referencia]
+    if not precos_validos:
+        return None
+
+    return max(precos_validos)
+
+
 def extrair_preco_clube(card) -> Optional[float]:
     textos_clube = card.find_all(string=re.compile(r"no\s+Clube", re.IGNORECASE))
 
@@ -535,7 +607,7 @@ def extrair_preco_clube(card) -> Optional[float]:
     return None
 
 
-def extrair_produto(nome_tag) -> Optional[Produto]:
+def extrair_produto(nome_tag, categoria: Optional[str]) -> Optional[Produto]:
     nome = extrair_nome(nome_tag)
     if not nome_parece_produto(nome):
         return None
@@ -552,10 +624,13 @@ def extrair_produto(nome_tag) -> Optional[Produto]:
 
     preco_atual = extrair_preco_atual(card)
     preco_clube = extrair_preco_clube(card)
+    preco_antigo = extrair_preco_antigo(card, preco_atual=preco_atual, preco_clube=preco_clube)
     link = extrair_link(card)
 
     return Produto(
         nome=nome,
+        categoria=categoria,
+        preco_antigo=preco_antigo,
         preco_atual=preco_atual,
         preco_clube=preco_clube,
         preco_por_unidade=extrair_preco_por_unidade(textos),
@@ -565,7 +640,7 @@ def extrair_produto(nome_tag) -> Optional[Produto]:
     )
 
 
-def extrair_produto_de_card(card) -> Optional[Produto]:
+def extrair_produto_de_card(card, categoria: Optional[str]) -> Optional[Produto]:
     nome = extrair_nome_do_card(card)
     if not nome_parece_produto(nome):
         return None
@@ -579,12 +654,15 @@ def extrair_produto_de_card(card) -> Optional[Produto]:
 
     preco_atual = extrair_preco_atual(card)
     preco_clube = extrair_preco_clube(card)
+    preco_antigo = extrair_preco_antigo(card, preco_atual=preco_atual, preco_clube=preco_clube)
 
     if preco_atual is None and preco_clube is None:
         return None
 
     return Produto(
         nome=nome,
+        categoria=categoria,
+        preco_antigo=preco_antigo,
         preco_atual=preco_atual,
         preco_clube=preco_clube,
         preco_por_unidade=extrair_preco_por_unidade(textos),
@@ -621,27 +699,44 @@ def conectar_mysql():
             CREATE TABLE IF NOT EXISTS `{TABLE_NAME}` (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 nomeProduto VARCHAR(255),
+                categoria VARCHAR(100),
+                precoAntigo DECIMAL(10,2),
                 preco DECIMAL(10,2),
                 precoClube DECIMAL(10,2),
                 link VARCHAR(500),
-                dataColeta DATETIME DEFAULT CURRENT_TIMESTAMP
+                dataColeta DATETIME DEFAULT CURRENT_TIMESTAMP,
+                data_extracao DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         )
+        garantir_coluna(cursor, "categoria", "VARCHAR(100) NULL AFTER nomeProduto")
+        garantir_coluna(cursor, "precoAntigo", "DECIMAL(10,2) NULL AFTER categoria")
+        garantir_coluna(cursor, "data_extracao", "DATETIME DEFAULT CURRENT_TIMESTAMP AFTER dataColeta")
 
     conexao.commit()
     return conexao
+
+
+def garantir_coluna(cursor, nome_coluna: str, definicao_sql: str) -> None:
+    cursor.execute(f"SHOW COLUMNS FROM `{TABLE_NAME}` LIKE %s", (nome_coluna,))
+    if cursor.fetchone():
+        return
+
+    cursor.execute(f"ALTER TABLE `{TABLE_NAME}` ADD COLUMN `{nome_coluna}` {definicao_sql}")
 
 
 def salvar_produtos(conexao, produtos: list[Produto]) -> int:
     sql = f"""
         INSERT INTO `{TABLE_NAME}` (
             nomeProduto,
+            categoria,
+            precoAntigo,
             preco,
             precoClube,
-            link
+            link,
+            data_extracao
         )
-        VALUES (%s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
     """
 
     salvos = 0
@@ -652,6 +747,8 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
                     sql,
                     (
                         produto.nome,
+                        produto.categoria,
+                        produto.preco_antigo,
                         produto.preco_atual,
                         produto.preco_clube,
                         produto.link,
@@ -659,12 +756,17 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
                 )
                 salvos += 1
                 preco_log = f"R$ {produto.preco_atual:.2f}" if produto.preco_atual is not None else "preco=None"
+                preco_antigo_log = (
+                    f"R$ {produto.preco_antigo:.2f}" if produto.preco_antigo is not None else "precoAntigo=None"
+                )
                 preco_clube_log = (
                     f"R$ {produto.preco_clube:.2f}" if produto.preco_clube is not None else "precoClube=None"
                 )
                 logger.info(
-                    "Produto salvo: %s | preco normal: %s | preco Clube: %s",
+                    "Produto salvo: %s | categoria: %s | preco antigo: %s | preco normal: %s | preco Clube: %s",
                     produto.nome,
+                    produto.categoria or "-",
+                    preco_antigo_log,
                     preco_log,
                     preco_clube_log,
                 )
@@ -677,10 +779,12 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
 
 def raspar_produtos() -> list[Produto]:
     driver = configurar_driver()
+    categoria = extrair_categoria_da_url(SCRAPER_URL)
 
     try:
-        logger.info("Abrindo site: %s", BASE_URL)
-        driver.get(BASE_URL)
+        logger.info("Abrindo site: %s", SCRAPER_URL)
+        logger.info("Categoria derivada da URL de scraping: %s", categoria or "nenhuma")
+        driver.get(SCRAPER_URL)
 
         try:
             WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
@@ -726,7 +830,7 @@ def raspar_produtos() -> list[Produto]:
 
         for nome_tag in nomes_produto:
             try:
-                adicionar_produto(extrair_produto(nome_tag))
+                adicionar_produto(extrair_produto(nome_tag, categoria=categoria))
             except Exception:
                 logger.exception("Erro ao extrair um card de produto.")
 
@@ -734,7 +838,7 @@ def raspar_produtos() -> list[Produto]:
             logger.info("Usando cards candidatos descobertos para complementar a extracao.")
             for card in cards_candidatos:
                 try:
-                    adicionar_produto(extrair_produto_de_card(card))
+                    adicionar_produto(extrair_produto_de_card(card, categoria=categoria))
                 except Exception:
                     logger.exception("Erro ao extrair um card candidato de produto.")
 
