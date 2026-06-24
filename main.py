@@ -3,6 +3,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -23,6 +24,8 @@ DB_NAME = "bistek"
 TABLE_NAME = "produtos"
 SELETOR_NOME_PRODUTO = ".vtex-flex-layout-0-x-flexRow--container__name"
 SELETOR_PRECO_ATUAL = ".vtex-flex-layout-0-x-flexRowContent--container__selling-price"
+ARQUIVO_DIAGNOSTICO_HTML = Path("pagina.html")
+ARQUIVO_DIAGNOSTICO_SCREENSHOT = Path("pagina.png")
 
 
 logging.basicConfig(
@@ -37,10 +40,20 @@ logger = logging.getLogger(__name__)
 class Produto:
     nome: str
     preco_atual: Optional[float]
+    preco_clube: Optional[float]
     preco_por_unidade: str
     desconto: str
     imagem: str
     link: str
+
+
+@dataclass
+class DiagnosticoPagina:
+    articles: int = 0
+    links_produto: int = 0
+    spans_com_preco: int = 0
+    elementos_clube: int = 0
+    cards_candidatos: int = 0
 
 
 def limpar_preco(texto: str) -> Optional[float]:
@@ -56,6 +69,14 @@ def limpar_preco(texto: str) -> Optional[float]:
         return None
 
     return float(texto)
+
+
+def extrair_primeiro_preco(texto: str) -> Optional[float]:
+    match = re.search(r"R\$\s*\d[\d\s.]*,\s*\d{2}", texto or "")
+    if not match:
+        return None
+
+    return limpar_preco(match.group(0))
 
 
 def limpar_texto(texto: str) -> str:
@@ -96,11 +117,52 @@ def aceitar_cookies_se_existir(driver: webdriver.Chrome) -> None:
         logger.warning("Nao foi possivel interagir com o banner de cookies: %s", erro)
 
 
+def pagina_tem_sinal_de_produto(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            """
+            const texto = document.body ? document.body.innerText : '';
+            return document.querySelector('a[href*="/p"]')
+                || texto.includes('R$')
+                || /no\\s+Clube/i.test(texto);
+            """
+        )
+    )
+
+
+def aguardar_produtos_ou_sinais(driver: webdriver.Chrome, timeout: int = 60) -> None:
+    logger.info("Aguardando ate %s segundos por sinais de produto no HTML.", timeout)
+
+    try:
+        WebDriverWait(driver, timeout).until(lambda navegador: pagina_tem_sinal_de_produto(navegador))
+        logger.info("Sinal de produto encontrado na pagina.")
+    except TimeoutException:
+        logger.warning("Nenhum link /p, texto R$ ou texto no Clube apareceu em %s segundos.", timeout)
+
+
+def contar_sinais_selenium(driver: webdriver.Chrome) -> dict[str, int]:
+    return driver.execute_script(
+        """
+        const todos = Array.from(document.querySelectorAll('*'));
+        return {
+            nomesAntigos: document.querySelectorAll(arguments[0]).length,
+            articles: document.querySelectorAll('article').length,
+            linksProduto: document.querySelectorAll('a[href*="/p"]').length,
+            spansComPreco: Array.from(document.querySelectorAll('span')).filter(
+                el => (el.innerText || '').includes('R$')
+            ).length,
+            elementosClube: todos.filter(el => /no\\s+Clube/i.test(el.innerText || '')).length
+        };
+        """,
+        SELETOR_NOME_PRODUTO,
+    )
+
+
 def rolar_ate_carregar_tudo(driver: webdriver.Chrome, pausa: float = 2.0, limite_sem_mudanca: int = 5) -> None:
     logger.info("Rolando a pagina para carregar todos os produtos.")
 
     altura_anterior = 0
-    qtd_nomes_anterior = 0
+    qtd_sinais_anterior = 0
     tentativas_sem_mudanca = 0
 
     while tentativas_sem_mudanca < limite_sem_mudanca:
@@ -108,21 +170,25 @@ def rolar_ate_carregar_tudo(driver: webdriver.Chrome, pausa: float = 2.0, limite
         time.sleep(pausa)
 
         altura_atual = driver.execute_script("return document.body.scrollHeight")
-        qtd_nomes_atual = len(driver.find_elements(By.CSS_SELECTOR, SELETOR_NOME_PRODUTO))
+        sinais = contar_sinais_selenium(driver)
+        qtd_sinais_atual = sinais["nomesAntigos"] + sinais["linksProduto"] + sinais["spansComPreco"]
 
         logger.info(
-            "Scroll realizado | altura=%s | nomes de produto=%s",
+            "Scroll realizado | altura=%s | nomes antigos=%s | links /p=%s | spans com preco=%s | no Clube=%s",
             altura_atual,
-            qtd_nomes_atual,
+            sinais["nomesAntigos"],
+            sinais["linksProduto"],
+            sinais["spansComPreco"],
+            sinais["elementosClube"],
         )
 
-        if altura_atual == altura_anterior and qtd_nomes_atual == qtd_nomes_anterior:
+        if altura_atual == altura_anterior and qtd_sinais_atual == qtd_sinais_anterior:
             tentativas_sem_mudanca += 1
         else:
             tentativas_sem_mudanca = 0
 
         altura_anterior = altura_atual
-        qtd_nomes_anterior = qtd_nomes_atual
+        qtd_sinais_anterior = qtd_sinais_atual
 
     logger.info("Scroll concluido. Nenhum novo produto apareceu nas ultimas tentativas.")
 
@@ -131,8 +197,71 @@ def texto_visivel_do_card(card) -> list[str]:
     return [limpar_texto(texto) for texto in card.stripped_strings if limpar_texto(texto)]
 
 
+def texto_do_elemento(elemento) -> str:
+    return limpar_texto(elemento.get_text(" ", strip=True))
+
+
 def extrair_nome(nome_tag) -> str:
     return limpar_texto(nome_tag.get("title") or nome_tag.get_text(" ", strip=True))
+
+
+def nome_parece_produto(nome: str) -> bool:
+    if not nome or len(nome) < 4:
+        return False
+
+    termos_institucionais = (
+        "politica",
+        "politicas",
+        "política",
+        "políticas",
+        "privacidade",
+        "termos",
+        "faq",
+        "atendimento",
+        "institucional",
+        "newsletter",
+        "cookies",
+    )
+    nome_lower = nome.lower()
+    return not any(termo in nome_lower for termo in termos_institucionais)
+
+
+def extrair_nome_do_card(card) -> str:
+    nome_tag = card.select_one(SELETOR_NOME_PRODUTO)
+    if nome_tag:
+        nome = extrair_nome(nome_tag)
+        if nome and nome_parece_produto(nome):
+            return nome
+
+    for seletor in ("h3 span", "h3", "a[href*='/p'] span", "a[href*='/p']"):
+        tag = card.select_one(seletor)
+        if not tag:
+            continue
+
+        nome = limpar_texto(tag.get("title") or tag.get_text(" ", strip=True))
+        if (
+            nome
+            and nome_parece_produto(nome)
+            and "R$" not in nome
+            and not re.search(r"no\s+Clube", nome, re.IGNORECASE)
+        ):
+            return nome
+
+    textos = texto_visivel_do_card(card)
+    for texto in textos:
+        texto_lower = texto.lower()
+        if (
+            "r$" not in texto_lower
+            and "clube" not in texto_lower
+            and "%" not in texto_lower
+            and "comprar" not in texto_lower
+            and "adicionar" not in texto_lower
+            and len(texto) > 3
+            and nome_parece_produto(texto)
+        ):
+            return texto
+
+    return ""
 
 
 def localizar_bloco_produto(nome_tag):
@@ -150,6 +279,97 @@ def localizar_bloco_produto(nome_tag):
             return ancestral
 
     return bloco_sem_preco
+
+
+def encontrar_cards_candidatos(soup: BeautifulSoup) -> list:
+    candidatos = []
+    vistos = set()
+    tags_card = {"a", "article", "section", "div", "li"}
+
+    for link_tag in soup.select('a[href*="/p"]'):
+        for elemento in [link_tag, *list(link_tag.parents)]:
+            if getattr(elemento, "name", None) not in tags_card:
+                continue
+            if elemento.name in ("html", "body"):
+                break
+
+            texto = texto_do_elemento(elemento)
+            link = extrair_link(elemento)
+            nome = extrair_nome_do_card(elemento)
+
+            if "R$" in texto and "/p" in link and nome:
+                chave = id(elemento)
+                if chave not in vistos:
+                    vistos.add(chave)
+                    candidatos.append(elemento)
+                break
+
+    if not candidatos:
+        for elemento in soup.find_all(["article", "section", "div", "li"]):
+            texto = texto_do_elemento(elemento)
+            link = extrair_link(elemento)
+            nome = extrair_nome_do_card(elemento)
+            if "R$" in texto and "/p" in link and nome:
+                chave = id(elemento)
+                if chave not in vistos:
+                    vistos.add(chave)
+                    candidatos.append(elemento)
+
+    candidatos.sort(key=lambda tag: len(texto_do_elemento(tag)))
+    return candidatos
+
+
+def gerar_diagnostico(soup: BeautifulSoup, cards_candidatos: list) -> DiagnosticoPagina:
+    elementos_clube = {
+        id(texto.parent)
+        for texto in soup.find_all(string=re.compile(r"no\s+Clube", re.IGNORECASE))
+        if texto.parent
+    }
+
+    return DiagnosticoPagina(
+        articles=len(soup.find_all("article")),
+        links_produto=len(soup.select('a[href*="/p"]')),
+        spans_com_preco=sum(1 for span in soup.find_all("span") if "R$" in texto_do_elemento(span)),
+        elementos_clube=len(elementos_clube),
+        cards_candidatos=len(cards_candidatos),
+    )
+
+
+def salvar_diagnostico(driver: webdriver.Chrome, soup: BeautifulSoup, diagnostico: DiagnosticoPagina) -> None:
+    html = driver.page_source
+    ARQUIVO_DIAGNOSTICO_HTML.write_text(html, encoding="utf-8")
+
+    try:
+        driver.save_screenshot(str(ARQUIVO_DIAGNOSTICO_SCREENSHOT))
+    except WebDriverException as erro:
+        logger.warning("Nao foi possivel salvar screenshot de diagnostico: %s", erro)
+
+    logger.info("HTML salvo em: %s", ARQUIVO_DIAGNOSTICO_HTML.resolve())
+    logger.info("Screenshot salvo em: %s", ARQUIVO_DIAGNOSTICO_SCREENSHOT.resolve())
+    logger.info("Primeiros 1000 caracteres do HTML: %s", limpar_texto(html[:1000]))
+    logger.info("Articles encontrados: %s", diagnostico.articles)
+    logger.info("Links /p encontrados: %s", diagnostico.links_produto)
+    logger.info("Spans com preco: %s", diagnostico.spans_com_preco)
+    logger.info('Elementos "no Clube": %s', diagnostico.elementos_clube)
+    logger.info("Cards candidatos a produto: %s", diagnostico.cards_candidatos)
+
+
+def logar_relatorio_diagnostico(diagnostico: DiagnosticoPagina, produtos_extraidos: int) -> None:
+    logger.info(
+        "\n===== DIAGNOSTICO =====\n"
+        "articles encontrados: %s\n"
+        "links /p encontrados: %s\n"
+        "spans com preco: %s\n"
+        'elementos "no Clube": %s\n'
+        "cards candidatos: %s\n"
+        "produtos extraidos: %s",
+        diagnostico.articles,
+        diagnostico.links_produto,
+        diagnostico.spans_com_preco,
+        diagnostico.elementos_clube,
+        diagnostico.cards_candidatos,
+        produtos_extraidos,
+    )
 
 
 def extrair_preco_por_unidade(textos: list[str]) -> str:
@@ -213,20 +433,71 @@ def extrair_link(card) -> str:
 
 def extrair_preco_atual(card) -> Optional[float]:
     preco_tag = card.select_one(SELETOR_PRECO_ATUAL)
-    if not preco_tag:
-        return None
+    if preco_tag:
+        texto_preco = limpar_texto(preco_tag.get_text(" ", strip=True))
+        try:
+            return limpar_preco(texto_preco)
+        except ValueError:
+            logger.warning("Nao foi possivel converter preco atual: %s", texto_preco)
+            return None
 
-    texto_preco = limpar_texto(preco_tag.get_text(" ", strip=True))
-    try:
-        return limpar_preco(texto_preco)
-    except ValueError:
-        logger.warning("Nao foi possivel converter preco atual: %s", texto_preco)
-        return None
+    for elemento in card.find_all(["span", "div", "p"]):
+        texto_preco = texto_do_elemento(elemento)
+        texto_lower = texto_preco.lower()
+        if "R$" not in texto_preco:
+            continue
+        if "clube" in texto_lower or "/kg" in texto_lower or "/l" in texto_lower or "/lt" in texto_lower:
+            continue
+
+        try:
+            preco = extrair_primeiro_preco(texto_preco)
+            if preco is not None:
+                return preco
+        except ValueError:
+            logger.warning("Nao foi possivel converter preco atual candidato: %s", texto_preco)
+
+    return None
+
+
+def extrair_preco_clube(card) -> Optional[float]:
+    textos_clube = card.find_all(string=re.compile(r"no\s+Clube", re.IGNORECASE))
+
+    for texto_clube in textos_clube:
+        elemento = texto_clube.parent
+        candidatos = []
+
+        while elemento and elemento != card.parent:
+            texto_contexto = limpar_texto(elemento.get_text(" ", strip=True))
+            if re.search(r"no\s+Clube", texto_contexto, re.IGNORECASE):
+                candidatos.append(texto_contexto)
+
+            if elemento == card:
+                break
+
+            elemento = elemento.parent
+
+        for texto_contexto in candidatos:
+            clube_match = re.search(r"no\s+Clube", texto_contexto, re.IGNORECASE)
+            precos = list(re.finditer(r"R\$\s*\d[\d\s.]*,\s*\d{2}", texto_contexto))
+
+            if not clube_match or not precos:
+                continue
+
+            precos_antes_clube = [preco for preco in precos if preco.end() <= clube_match.start()]
+            preco_match = precos_antes_clube[-1] if precos_antes_clube else precos[0]
+
+            try:
+                return limpar_preco(preco_match.group(0))
+            except ValueError:
+                logger.warning("Nao foi possivel converter preco Clube: %s", preco_match.group(0))
+                return None
+
+    return None
 
 
 def extrair_produto(nome_tag) -> Optional[Produto]:
     nome = extrair_nome(nome_tag)
-    if not nome:
+    if not nome_parece_produto(nome):
         return None
 
     card = localizar_bloco_produto(nome_tag)
@@ -240,11 +511,42 @@ def extrair_produto(nome_tag) -> Optional[Produto]:
         return None
 
     preco_atual = extrair_preco_atual(card)
+    preco_clube = extrair_preco_clube(card)
     link = extrair_link(card)
 
     return Produto(
         nome=nome,
         preco_atual=preco_atual,
+        preco_clube=preco_clube,
+        preco_por_unidade=extrair_preco_por_unidade(textos),
+        desconto=extrair_desconto(textos),
+        imagem=extrair_imagem(card),
+        link=link,
+    )
+
+
+def extrair_produto_de_card(card) -> Optional[Produto]:
+    nome = extrair_nome_do_card(card)
+    if not nome_parece_produto(nome):
+        return None
+
+    textos = texto_visivel_do_card(card)
+    texto_card = " ".join(textos)
+    link = extrair_link(card)
+
+    if "R$" not in texto_card or "/p" not in link:
+        return None
+
+    preco_atual = extrair_preco_atual(card)
+    preco_clube = extrair_preco_clube(card)
+
+    if preco_atual is None and preco_clube is None:
+        return None
+
+    return Produto(
+        nome=nome,
+        preco_atual=preco_atual,
+        preco_clube=preco_clube,
         preco_por_unidade=extrair_preco_por_unidade(textos),
         desconto=extrair_desconto(textos),
         imagem=extrair_imagem(card),
@@ -280,6 +582,7 @@ def conectar_mysql():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 nomeProduto VARCHAR(255),
                 preco DECIMAL(10,2),
+                precoClube DECIMAL(10,2),
                 precoPorUnidade VARCHAR(50),
                 desconto VARCHAR(20),
                 link VARCHAR(500),
@@ -298,12 +601,13 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
         INSERT INTO `{TABLE_NAME}` (
             nomeProduto,
             preco,
+            precoClube,
             precoPorUnidade,
             desconto,
             link,
             imagem
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
 
     salvos = 0
@@ -315,6 +619,7 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
                     (
                         produto.nome,
                         produto.preco_atual,
+                        produto.preco_clube,
                         produto.preco_por_unidade,
                         produto.desconto,
                         produto.link,
@@ -323,7 +628,15 @@ def salvar_produtos(conexao, produtos: list[Produto]) -> int:
                 )
                 salvos += 1
                 preco_log = f"R$ {produto.preco_atual:.2f}" if produto.preco_atual is not None else "preco=None"
-                logger.info("Produto salvo: %s | %s", produto.nome, preco_log)
+                preco_clube_log = (
+                    f"R$ {produto.preco_clube:.2f}" if produto.preco_clube is not None else "precoClube=None"
+                )
+                logger.info(
+                    "Produto salvo: %s | preco normal: %s | preco Clube: %s",
+                    produto.nome,
+                    preco_log,
+                    preco_clube_log,
+                )
             except Exception:
                 logger.exception("Erro ao salvar produto: %s", produto.nome)
 
@@ -340,39 +653,62 @@ def raspar_produtos() -> list[Produto]:
 
         try:
             WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            WebDriverWait(driver, 25).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, SELETOR_NOME_PRODUTO))
-            )
         except TimeoutException:
-            logger.warning("A pagina abriu, mas nenhum nome de produto apareceu dentro do tempo esperado.")
+            logger.warning("A pagina abriu, mas o body nao apareceu dentro do tempo esperado.")
 
         aceitar_cookies_se_existir(driver)
+        aguardar_produtos_ou_sinais(driver, timeout=60)
         rolar_ate_carregar_tudo(driver)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         nomes_produto = soup.select(SELETOR_NOME_PRODUTO)
+        cards_candidatos = encontrar_cards_candidatos(soup)
+        diagnostico = gerar_diagnostico(soup, cards_candidatos)
+        salvar_diagnostico(driver, soup, diagnostico)
+
         logger.info("Nomes de produto encontrados no HTML final: %s", len(nomes_produto))
+        logger.info("Articles encontrados no HTML final: %s", diagnostico.articles)
+        logger.info("Links /p encontrados no HTML final: %s", diagnostico.links_produto)
+        logger.info("Spans com preco no HTML final: %s", diagnostico.spans_com_preco)
+        logger.info('Elementos "no Clube" no HTML final: %s', diagnostico.elementos_clube)
+        logger.info("Cards candidatos no HTML final: %s", diagnostico.cards_candidatos)
 
         produtos: list[Produto] = []
         chaves_vistas: set[tuple[str, str]] = set()
 
+        def adicionar_produto(produto: Optional[Produto]) -> None:
+            if not produto:
+                return
+
+            chave = (produto.nome.lower(), produto.link)
+            if chave in chaves_vistas:
+                return
+
+            chaves_vistas.add(chave)
+            produtos.append(produto)
+            logger.info(
+                "Produto extraido: %s | preco normal=%s | preco Clube=%s",
+                produto.nome,
+                produto.preco_atual,
+                produto.preco_clube,
+            )
+
         for nome_tag in nomes_produto:
             try:
-                produto = extrair_produto(nome_tag)
-                if not produto:
-                    continue
-
-                chave = (produto.nome.lower(), produto.link)
-                if chave in chaves_vistas:
-                    continue
-
-                chaves_vistas.add(chave)
-                produtos.append(produto)
-                logger.info("Produto extraido: %s", produto.nome)
+                adicionar_produto(extrair_produto(nome_tag))
             except Exception:
                 logger.exception("Erro ao extrair um card de produto.")
 
+        if cards_candidatos:
+            logger.info("Usando cards candidatos descobertos para complementar a extracao.")
+            for card in cards_candidatos:
+                try:
+                    adicionar_produto(extrair_produto_de_card(card))
+                except Exception:
+                    logger.exception("Erro ao extrair um card candidato de produto.")
+
         logger.info("Produtos validos extraidos: %s", len(produtos))
+        logar_relatorio_diagnostico(diagnostico, len(produtos))
         return produtos
     finally:
         driver.quit()
