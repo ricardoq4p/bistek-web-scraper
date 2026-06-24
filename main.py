@@ -1,5 +1,6 @@
 import logging
 import os
+import platform
 import re
 import time
 from dataclasses import dataclass
@@ -11,7 +12,6 @@ import pymysql
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -84,21 +84,33 @@ def limpar_texto(texto: str) -> str:
 
 
 def configurar_driver() -> webdriver.Chrome:
-    chrome_options = Options()
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--start-maximized")
+    options = webdriver.ChromeOptions()
 
-    headless = os.getenv("HEADLESS", "0").strip() == "1"
-    if headless:
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--window-size=1366,1800")
+    if os.path.exists("/usr/bin/google-chrome"):
+        options.binary_location = "/usr/bin/google-chrome"
+        logger.info("Executando no GitHub Codespaces.")
+        logger.info("Chrome encontrado em: /usr/bin/google-chrome")
+    else:
+        logger.info("Executando em %s.", platform.system())
+
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--start-maximized")
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
 
     logger.info("Iniciando Chrome via Selenium.")
-    return webdriver.Chrome(
+    logger.info("Chrome binary: %s", options.binary_location)
+
+    driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
-        options=chrome_options,
+        options=options,
     )
+    logger.info("Chrome iniciado com sucesso.")
+    return driver
 
 
 def aceitar_cookies_se_existir(driver: webdriver.Chrome) -> None:
