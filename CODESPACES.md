@@ -22,6 +22,10 @@ Depois de criar ou reconstruir o Codespace, rode:
 python main.py
 ```
 
+Se o comando `docker` nao existir no terminal, rode **Codespaces: Rebuild Container** pelo Command Palette. O projeto usa o recurso `docker-in-docker` configurado em `.devcontainer/devcontainer.json`.
+
+Se o script avisar que `apt/dpkg` esta ocupado, aguarde. Ele tenta novamente automaticamente ate o lock ser liberado.
+
 Para abrir a pagina de consulta:
 
 ```bash

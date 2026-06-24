@@ -1,6 +1,9 @@
 {
   "name": "bistek-web-scraper",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
   "postCreateCommand": "bash scripts/setup_codespaces.sh",
   "forwardPorts": [5000, 8080, 3306],
   "portsAttributes": {
