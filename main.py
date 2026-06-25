@@ -17,6 +17,10 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
+from email_report import enviar_relatorio_email
+
+
 BASE_URL = "https://www.bistek.com.br"
 SCRAPER_URL = os.getenv("BISTEK_SCRAPER_URL", BASE_URL)
 DB_NAME = "bistek"
@@ -866,6 +870,15 @@ def main() -> None:
         conexao = conectar_mysql()
         total_salvo = salvar_produtos(conexao, produtos)
         logger.info("Processo concluido. Produtos salvos/atualizados: %s", total_salvo)
+
+        try:
+            email_enviado = enviar_relatorio_email(produtos)
+            if email_enviado:
+                logger.info("Relatorio por e-mail enviado com sucesso.")
+            else:
+                logger.info("Envio de e-mail desativado. Configure EMAIL_ENABLED=1 para ativar.")
+        except Exception:
+            logger.exception("Erro ao enviar relatorio por e-mail.")
     except Exception:
         logger.exception("Erro geral na execucao do scraper.")
     finally:
